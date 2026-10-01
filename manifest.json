@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "Videoroom — мультиракурс для YouTube",
+  "version": "0.1.0",
+  "description": "Объединяет видео одного события, снятые с разных ракурсов, и позволяет переключаться между ними.",
+  "minimum_chrome_version": "111",
+  "permissions": ["storage", "activeTab"],
+  "action": {
+    "default_title": "Videoroom",
+    "default_popup": "src/popup/popup.html"
+  },
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*"],
+      "js": ["src/content/page-bridge.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://www.youtube.com/*"],
+      "js": ["src/shared/rooms.js", "src/content/audio-sync.js", "src/content/content.js"],
+      "css": ["src/content/content.css"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://beetlejuice8921.github.io/videoroom-cinema/*"],
+      "js": ["src/shared/rooms.js", "src/content/cinema-bridge.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "name": "KOD 2016 — полуфинал Hip Hop: France vs China",
+  "audioMode": "main",
+  "cameras": [
+    { "videoId": "W7HeG_V_eBo", "label": "Трансляция KODTV", "offset": 8.7 },
+    { "videoId": "SSutx6RUza8", "label": "Ракурс stance", "offset": 9.2 },
+    { "videoId": "zYjWI0eL41o", "label": "Les Twins (Facebook)", "offset": 0 },
+    { "videoId": "_AhXAGFlLu8", "label": "Зал (lejana26)", "offset": 357.6 }
+  ]
+}

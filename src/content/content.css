@@ -1,0 +1,206 @@
+/* ---------- Stage: over the native video, under YouTube's controls (z 59) ---------- */
+
+.vr-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 11;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+
+.vr-poster {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: #000 center / cover no-repeat;
+  color: #fff;
+  font: 500 16px/1.4 Roboto, Arial, sans-serif;
+  text-align: center;
+}
+
+.vr-poster.vr-show {
+  display: flex;
+}
+
+.vr-poster::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.vr-poster > * {
+  position: relative;
+}
+
+
+.vr-poster-note {
+  font-size: 14px;
+  font-weight: 400;
+  opacity: 0.8;
+}
+
+.vr-spinner {
+  width: 36px;
+  height: 36px;
+  margin-bottom: 8px;
+  border: 3px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: vr-spin 0.8s linear infinite;
+}
+
+@keyframes vr-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.vr-toast {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 4;
+  max-width: calc(100% - 32px);
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  font: 500 15px/1.4 Roboto, Arial, sans-serif;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.vr-toast.vr-show {
+  opacity: 1;
+}
+
+/* ---------- Strip under the player ---------- */
+
+.vr-strip {
+  margin: 12px 0 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--yt-spec-badge-chip-background, rgba(0, 0, 0, 0.05));
+  color: var(--yt-spec-text-primary, #0f0f0f);
+  font: 400 13px/1.4 Roboto, Arial, sans-serif;
+}
+
+.vr-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.vr-title {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.vr-hint {
+  color: var(--yt-spec-text-secondary, #606060);
+  font-size: 12px;
+}
+
+.vr-spacer {
+  flex: 1;
+}
+
+
+.vr-btn {
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 16px;
+  background: var(--yt-spec-10-percent-layer, rgba(0, 0, 0, 0.1));
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.vr-btn-accent {
+  background: #3ea6ff;
+  color: #0f0f0f;
+  font-weight: 500;
+}
+
+.vr-btn:hover {
+  filter: brightness(0.92);
+}
+
+.vr-cams {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.vr-cam {
+  position: relative;
+  flex: 0 0 160px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #000;
+  color: #fff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.vr-cam img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  opacity: 0.8;
+  transition: opacity 0.15s;
+}
+
+.vr-cam:hover img,
+.vr-cam.vr-active img {
+  opacity: 1;
+}
+
+.vr-cam.vr-active {
+  border-color: #3ea6ff;
+}
+
+.vr-cam.vr-off img {
+  filter: grayscale(1);
+  opacity: 0.45;
+}
+
+.vr-num {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.75);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+
+.vr-label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 14px 6px 4px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

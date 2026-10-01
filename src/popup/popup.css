@@ -1,0 +1,251 @@
+:root {
+  --bg: #ffffff;
+  --fg: #0f0f0f;
+  --muted: #606060;
+  --line: #e5e5e5;
+  --field: #f2f2f2;
+  --accent: #065fd4;
+  --accent-fg: #ffffff;
+  --danger: #cc0000;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1f1f1f;
+    --fg: #f1f1f1;
+    --muted: #aaaaaa;
+    --line: #3a3a3a;
+    --field: #2c2c2c;
+    --accent: #3ea6ff;
+    --accent-fg: #0f0f0f;
+    --danger: #ff6b6b;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  width: 440px;
+  margin: 0;
+  padding: 12px 14px 14px;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.4 Roboto, 'Segoe UI', Arial, sans-serif;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+button {
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--field);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover {
+  filter: brightness(0.95);
+}
+
+button.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+button.link {
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+}
+
+button.danger {
+  color: var(--danger);
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--field);
+  color: var(--fg);
+  font: inherit;
+}
+
+input.invalid {
+  border-color: var(--danger);
+}
+
+textarea {
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: 12px;
+}
+
+.error {
+  white-space: pre-line;
+  margin: 8px 0;
+  color: var(--danger);
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.current {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--field);
+}
+
+.current:empty {
+  display: none;
+}
+
+.current .row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.rooms:empty::before {
+  content: 'Комнат пока нет. Создайте первую: добавьте ссылки на видео одного события с разных ракурсов.';
+  display: block;
+  padding: 12px 0;
+  color: var(--muted);
+}
+
+.room {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.room img {
+  width: 64px;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 4px;
+  background: #000;
+}
+
+.room .info {
+  flex: 1;
+  min-width: 0;
+}
+
+.room .name {
+  overflow: hidden;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.room .btns {
+  display: flex;
+  gap: 4px;
+}
+
+.room .btns button {
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+.field {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.field > span {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cams-head {
+  display: flex;
+  justify-content: space-between;
+  margin: 10px 30px 4px 54px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cam-row {
+  display: grid;
+  grid-template-columns: 48px 1fr 76px 24px;
+  grid-template-rows: auto auto;
+  gap: 4px 6px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.cam-row img {
+  grid-row: span 2;
+  width: 48px;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 3px;
+  background: var(--field);
+}
+
+.cam-row .url {
+  grid-column: 2;
+}
+
+.cam-row .offset {
+  grid-column: 3;
+  grid-row: span 2;
+}
+
+.cam-row .remove {
+  grid-column: 4;
+  grid-row: span 2;
+  padding: 0;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 16px;
+}
+
+.cam-row .label {
+  grid-column: 2;
+  padding: 3px 8px;
+  font-size: 12px;
+}

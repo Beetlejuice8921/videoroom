@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Videoroom</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <!-- Room list -->
+  <section id="list-view">
+    <header>
+      <h1>🎥 Videoroom</h1>
+    </header>
+    <div id="current" class="current"></div>
+    <div id="rooms" class="rooms"></div>
+    <div class="actions">
+      <button id="new-room" class="primary">+ Новая комната</button>
+      <button id="open-import">Импорт</button>
+      <button id="open-settings" title="Настройки">⚙</button>
+    </div>
+  </section>
+
+  <!-- Settings -->
+  <section id="settings-view" hidden>
+    <header>
+      <button id="settings-back" class="link">← Назад</button>
+      <h1>Настройки</h1>
+    </header>
+    <label class="field">
+      <span>Адрес кинозала (необязательно)</span>
+      <input id="cinema-url" type="url" placeholder="https://you.github.io/videoroom/room/room.html">
+    </label>
+    <p class="muted small">
+      Пусто — стандартный кинозал на GitHub Pages. Свою копию можно разместить
+      на любом https-хостинге: укажите адрес её <code>room.html</code>.
+      Сохранение сдвигов работает только на стандартном адресе.
+    </p>
+    <div id="settings-error" class="error" hidden></div>
+    <div class="actions">
+      <button id="save-settings" class="primary">Сохранить</button>
+    </div>
+  </section>
+
+  <!-- Room editor -->
+  <section id="edit-view" hidden>
+    <header>
+      <button id="edit-back" class="link">← Назад</button>
+      <h1 id="edit-title">Комната</h1>
+    </header>
+    <label class="field">
+      <span>Название</span>
+      <input id="room-name" type="text" placeholder="Концерт, 12.09.2026">
+    </label>
+    <label class="field">
+      <span>Звук</span>
+      <select id="room-audio">
+        <option value="main">Из камеры 1 — непрерывный (в кинозале)</option>
+        <option value="active">Из активного ракурса (в кинозале)</option>
+      </select>
+    </label>
+    <div class="cams-head">
+      <span>Ракурсы</span>
+      <span class="muted">сдвиг, с</span>
+    </div>
+    <div id="cam-rows"></div>
+    <button id="add-cam" class="link">+ Добавить ракурс</button>
+    <p class="muted small">
+      Можно вставить сразу несколько ссылок, по одной на строку.
+      Сдвиг — секунда общей шкалы, в которую начинается видео. Точнее его
+      удобно подгонять кнопками ±0.1 под плеером во время просмотра.
+    </p>
+    <div id="edit-error" class="error" hidden></div>
+    <div class="actions">
+      <button id="save-room" class="primary">Сохранить</button>
+      <button id="cancel-room">Отмена</button>
+    </div>
+  </section>
+
+  <!-- Import -->
+  <section id="import-view" hidden>
+    <header>
+      <button id="import-back" class="link">← Назад</button>
+      <h1>Импорт комнаты</h1>
+    </header>
+    <textarea id="import-text" rows="10" placeholder='{"name": "...", "cameras": [{"videoId": "...", "offset": 0}]}'></textarea>
+    <div id="import-error" class="error" hidden></div>
+    <div class="actions">
+      <button id="do-import" class="primary">Импортировать</button>
+    </div>
+  </section>
+
+  <script src="../shared/rooms.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
