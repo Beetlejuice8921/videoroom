@@ -10,8 +10,9 @@
   'use strict';
 
   const DT = 0.1; // s, envelope grid
-  const RATE = 8; // playback speed while capturing (audio still flows up to 16x)
-  const BLOCK = 512; // samples per ScriptProcessor block: ~0.1 s of media at 8x
+  const RATE = 8; // playback speed for full captures (audio still flows up to 16x)
+  const CHECK_RATE = 16; // short excerpts when checking search candidates
+  const BLOCK = 256; // samples per ScriptProcessor block: ≤0.1 s of media even at 16x
   const MIN_OVERLAP = 90; // s of common audio required for a pair
   const MIN_RATIO = 1.3; // best peak vs best peak elsewhere (outside ±2 s)
   const CACHE_PREFIX = 'env:';
@@ -111,7 +112,7 @@
 
   // Finds lag L (seconds) such that a(t) ≈ b(t − L): what happens at time t in
   // video B happens at t + L in video A, i.e. offset(B) = offset(A) + L.
-  function correlate(a, b) {
+  function correlate(a, b, minOverlapSec = MIN_OVERLAP) {
     let n = 1;
     while (n < a.length + b.length) n <<= 1;
     const ar = new Float64Array(n);
@@ -130,7 +131,7 @@
     }
     fft(ar, ai, true);
 
-    const minOv = Math.round(MIN_OVERLAP / DT);
+    const minOv = Math.round(minOverlapSec / DT);
     const scores = new Map();
     let best = -Infinity;
     let bestK = 0;
@@ -146,8 +147,17 @@
     }
     if (!scores.size) return null;
     let second = -Infinity;
+    let sum = 0;
+    let sum2 = 0;
     const guard = Math.round(2 / DT);
-    for (const [k, s] of scores) if (Math.abs(k - bestK) > guard && s > second) second = s;
+    for (const [k, s] of scores) {
+      if (Math.abs(k - bestK) > guard && s > second) second = s;
+      sum += s;
+      sum2 += s * s;
+    }
+    // How far the peak stands above all other lags, in standard deviations.
+    const mean = sum / scores.size;
+    const sd = Math.sqrt(Math.max(1e-12, sum2 / scores.size - mean * mean));
     const y0 = scores.get(bestK - 1) ?? best;
     const y2 = scores.get(bestK + 1) ?? best;
     const den = y0 - 2 * best + y2;
@@ -156,6 +166,7 @@
       lag: (bestK + frac) * DT,
       score: best,
       ratio: second > 0 ? best / second : Infinity,
+      z: (best - mean) / sd,
     };
   }
 
@@ -195,6 +206,17 @@
       }
     }
     return { rel, confidence, edges };
+  }
+
+  // Does a short excerpt of a candidate (starting at `start` s of that video)
+  // share audio with the reference? Returns the candidate's offset relative to
+  // the reference and the confidence ratio.
+  function matchExcerpt(refEnv, excerptEnv, start) {
+    const len = excerptEnv.length * DT;
+    const r = correlate(features(refEnv), features(excerptEnv), len * 0.9);
+    if (!r) return null;
+    // excerpt time t ↔ candidate time start + t ↔ reference time t + lag
+    return { offset: r.lag - start, ratio: r.ratio, z: r.z };
   }
 
   // ---------- envelope cache ----------
@@ -263,16 +285,30 @@
       this.cancelled = true;
     }
 
+    // Full-length envelope (cached per video).
     async envelope(videoId, label) {
       const cached = await loadCachedEnv(videoId);
       if (cached) return cached;
+      const { samples, dur } = await this.record(videoId, 0, Infinity, RATE, label);
+      const env = toGrid(samples, dur);
+      await saveCachedEnv(videoId, env);
+      return env;
+    }
 
+    // Short excerpt [start, start + length) at CHECK_RATE; times relative to start.
+    async excerpt(videoId, start, length, label) {
+      const { samples } = await this.record(videoId, start, start + length, CHECK_RATE, label);
+      for (let i = 0; i < samples.length; i += 2) samples[i] -= start;
+      return toGrid(samples, length);
+    }
+
+    async record(videoId, from, to, rate, label) {
       const { video: v, playerEl } = this.d;
       const g = ensureGraph(v);
       await g.ctx.resume();
       const adShowing = () => playerEl.classList.contains('ad-showing');
 
-      this.d.load(videoId, 0);
+      this.d.load(videoId, from);
       const deadline = Date.now() + 60000;
       while (!(this.d.nativeVideoId() === videoId && !adShowing() && v.readyState >= 2)) {
         if (this.cancelled) throw new Error('cancelled');
@@ -283,7 +319,7 @@
       const samples = [];
       g.out.gain.value = 0;
       g.onBlock = (d) => {
-        if (v.paused || v.seeking || v.readyState < 3 || adShowing()) return;
+        if (v.paused || v.seeking || v.readyState < 3 || adShowing() || v.currentTime < from - 1) return;
         let s = 0;
         for (let i = 0; i < d.length; i++) s += d[i] * d[i];
         samples.push(v.currentTime, Math.sqrt(s / d.length));
@@ -293,7 +329,7 @@
       v.volume = 1;
       v.muted = false;
       v.preservesPitch = false;
-      if (v.currentTime > 1) v.currentTime = 0;
+      if (Math.abs(v.currentTime - from) > 2) v.currentTime = from;
 
       let dur = v.duration;
       try {
@@ -303,23 +339,24 @@
           if (this.cancelled) throw new Error('cancelled');
           if (this.d.nativeVideoId() !== videoId) {
             // Ran into YouTube's autoplay at the very end: what we have is enough.
-            if (Number.isFinite(dur) && lastT >= dur * 0.97) break;
+            if (Number.isFinite(dur) && lastT >= Math.min(to, dur) * 0.97) break;
             throw new Error('видео сменилось во время захвата');
           }
           if (!adShowing()) {
             dur = v.duration;
-            if (v.playbackRate !== RATE) v.playbackRate = RATE;
+            if (v.playbackRate !== rate) v.playbackRate = rate;
             if (v.paused && !v.ended) v.play().catch(() => {});
           }
-          // Stop a few seconds early (at 8x that's under a second of real time)
+          // Stop a few seconds before the end (well under a second of real time)
           // so the video never ends and YouTube's autoplay doesn't navigate away.
-          if (v.ended || (Number.isFinite(dur) && v.currentTime >= dur - 4)) break;
-          const tick = Number.isFinite(dur) && dur - v.currentTime < 15 ? 50 : 250;
+          if (v.ended || v.currentTime >= to || (Number.isFinite(dur) && v.currentTime >= dur - 4)) break;
+          const left = Math.min(to, Number.isFinite(dur) ? dur : Infinity) - v.currentTime;
+          const tick = left < 15 ? 50 : 250;
           if (Math.abs(v.currentTime - lastT) < 0.01) {
             if ((stalledMs += tick) > 30000) throw new Error(`видео ${videoId} зависло`);
           } else stalledMs = 0;
           lastT = v.currentTime;
-          this.d.onProgress?.({ videoId, label, pos: v.currentTime, dur });
+          this.d.onProgress?.({ videoId, label, pos: v.currentTime - from, dur: Math.min(to, dur) - from });
           await sleep(tick);
         }
       } finally {
@@ -331,12 +368,9 @@
         v.muted = saved.muted;
         g.out.gain.value = 1;
       }
-
-      const env = toGrid(samples, dur);
-      await saveCachedEnv(videoId, env);
-      return env;
+      return { samples, dur };
     }
   }
 
-  globalThis.VRAudioSync = { Capture, solveOffsets, correlate, features, toGrid, encodeEnv, decodeEnv, DT, RATE };
+  globalThis.VRAudioSync = { Capture, solveOffsets, matchExcerpt, correlate, features, toGrid, encodeEnv, decodeEnv, DT, RATE, CHECK_RATE };
 })();

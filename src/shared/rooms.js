@@ -71,12 +71,24 @@
     return room.cameras[i]?.pos || defaultPos(i, room.cameras.length);
   }
 
-  // WASD: the camera that lies most in the given direction from the current one.
-  // Up = towards the stage. Prefers near cameras within ±60° of the direction.
-  const DIRS = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+  // Stage centre on the map (movable in the map editor); top centre by default.
+  const DEFAULT_STAGE = { x: 0.5, y: 0.1 };
+  function stagePos(room) {
+    return room.stage || DEFAULT_STAGE;
+  }
+
+  // WASD: the camera that lies most in the given direction from the current one,
+  // as seen by a viewer facing the stage: up = towards the stage, down = away,
+  // left/right across. Prefers near cameras within ±60° of the direction.
   function pickDirection(room, fromId, dir, skip = () => false) {
-    const [dx, dy] = DIRS[dir];
     const p = camPos(room, fromId);
+    const s = stagePos(room);
+    let fx = s.x - p.x;
+    let fy = s.y - p.y;
+    const fl = Math.hypot(fx, fy);
+    if (fl < 1e-6) [fx, fy] = [0, -1];
+    else [fx, fy] = [fx / fl, fy / fl];
+    const [dx, dy] = { up: [fx, fy], down: [-fx, -fy], left: [fy, -fx], right: [-fy, fx] }[dir];
     let best = null;
     let bestScore = Infinity;
     for (const c of room.cameras) {
@@ -122,7 +134,11 @@
       cameras.push(cam);
     }
     if (!cameras.length) return null;
+    const sx = Number(obj.stage?.x);
+    const sy = Number(obj.stage?.y);
+    const stage = Number.isFinite(sx) && Number.isFinite(sy) ? { stage: { x: clamp01(sx), y: clamp01(sy) } } : {};
     return {
+      ...stage,
       id: typeof obj.id === 'string' && obj.id ? obj.id : newRoomId(),
       name: typeof obj.name === 'string' && obj.name.trim() ? obj.name.trim().slice(0, 120) : 'Без названия',
       audioMode: obj.audioMode === 'active' ? 'active' : 'main',
@@ -134,8 +150,8 @@
   // Cinema page link. The room itself travels in the hash too, so the page
   // also works when hosted outside the extension (no chrome.storage there).
   function encodeRoomHash({ room, cam, t }) {
-    const { name, audioMode, cameras } = room;
-    const json = JSON.stringify({ name, audioMode, cameras });
+    const { name, audioMode, cameras, stage } = room;
+    const json = JSON.stringify({ name, audioMode, cameras, stage });
     const data = btoa(String.fromCharCode(...new TextEncoder().encode(json)));
     const p = new URLSearchParams({ room: room.id, data });
     if (cam) p.set('cam', cam);
@@ -219,6 +235,7 @@
     DEFAULT_CINEMA_URL,
     defaultPos,
     camPos,
+    stagePos,
     pickDirection,
   };
 })();

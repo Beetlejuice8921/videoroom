@@ -1,0 +1,59 @@
+name: Submit room
+
+on:
+  issues:
+    types: [opened, edited]
+  workflow_dispatch:
+    inputs:
+      room_json:
+        description: Room JSON (as exported by the extension)
+        required: true
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: registry
+  cancel-in-progress: false
+
+jobs:
+  submit:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.issue.title, 'Room:')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validate and write
+        id: submit
+        run: node scripts/submit.js
+        env:
+          # Untrusted input goes through env, never into the script text.
+          ROOM_JSON: ${{ inputs.room_json }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          SUBMITTER: ${{ github.event.issue.user.login || github.actor }}
+          REPO_OWNER: ${{ github.repository_owner }}
+
+      - name: Commit
+        run: |
+          git config user.name "videoroom-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add rooms index.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Room: $(cat .result-title)"
+            git push
+          fi
+
+      - name: Reply on the issue
+        if: always() && github.event_name == 'issues'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          [ -f .result.md ] || echo "❌ Не удалось обработать заявку, подробности в логе Actions." > .result.md
+          gh issue comment "$ISSUE" --body-file .result.md
+          if [ -f .result-ok ]; then gh issue close "$ISSUE"; fi

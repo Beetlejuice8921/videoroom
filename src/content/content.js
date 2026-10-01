@@ -97,8 +97,9 @@
   // ---------- session ----------
 
   class RoomSession {
-    constructor(room, pageVid, { player, video, below }) {
+    constructor(room, pageVid, { player, video, below }, { shared = false } = {}) {
       this.room = room;
+      this.shared = shared; // from the public registry; becomes a local copy on first save
       this.pageVideoId = pageVid;
       this.playerEl = player;
       this.video = video;
@@ -117,6 +118,23 @@
       this.strip = h('div', { class: 'vr-strip' });
       below.prepend(this.strip);
       this.strip.addEventListener('click', (e) => this.onStripClick(e));
+
+      this.map = new globalThis.VRVenueMap({
+        getRoom: () => this.room,
+        getActive: () => this.active,
+        isUnavailable: (id) => id !== this.active && !!this.targetFor(this.cam(id)).off,
+        label: (cam) => this.camLabel(cam),
+        onSelect: (id) => this.switchTo(id),
+        onMove: (id, pos) => {
+          this.cam(id).pos = pos;
+          this.scheduleSave();
+        },
+        onStageMove: (pos) => {
+          this.room.stage = pos;
+          this.scheduleSave();
+        },
+        onEditToggle: (on) => this.toast(on ? 'Перетащите камеры и сцену туда, где они были. ✎ — готово' : 'Расстановка сохранена'),
+      });
 
       this.timer = setInterval(() => this.tick(), TICK_INTERVAL);
       this.renderStrip();
@@ -156,6 +174,14 @@
       if (this.saveTimer || room.updatedAt === this.savedAt) return;
       this.room = room;
       this.renderStrip();
+      this.maybeOfferSync();
+    }
+
+    // New cameras arrive with offset 0, so offer to find real offsets by audio.
+    maybeOfferSync() {
+      if (!this.syncAfterUpdate) return;
+      this.syncAfterUpdate = false;
+      setTimeout(() => this.syncByAudio(), 300);
     }
 
     scheduleSave() {
@@ -164,6 +190,10 @@
         this.saveTimer = null;
         const saved = await VR.saveRoom(this.room);
         this.savedAt = saved.updatedAt;
+        if (this.shared) {
+          this.shared = false; // now a local copy
+          this.renderStrip();
+        }
       }, SAVE_DEBOUNCE);
     }
 
@@ -172,7 +202,7 @@
     async switchTo(id) {
       const cam = this.cam(id);
       if (!cam || id === this.active) return;
-      if (this.syncCapture) return this.toast('Идёт синхронизация по звуку');
+      if (this.syncCapture || takeover) return this.toast('Идёт анализ звука — подождите');
       if (this.adShowing()) return this.toast('Дождитесь окончания рекламы');
       const target = this.targetFor(cam);
       if (target.off) return this.toast(`${this.camLabel(cam)}: ${target.off}`);
@@ -367,7 +397,7 @@
     // ----- periodic -----
 
     tick() {
-      if (this.switching) return;
+      if (this.switching || takeover) return;
       // Follow changes we didn't make (e.g. YouTube's own navigation).
       const id = nativeVideoId();
       if (id && id !== this.active && this.cam(id)) {
@@ -415,9 +445,16 @@
       const head = h(
         'div',
         { class: 'vr-head' },
-        h('span', { class: 'vr-title', text: `🎥 ${this.room.name}` }),
+        h('span', { class: 'vr-title', text: `${this.shared ? '🌐' : '🎥'} ${this.room.name}` }),
+        this.shared && h('span', { class: 'vr-hint', text: 'общая комната · ваши изменения сохранятся как личная копия' }),
         h('span', { class: 'vr-hint', text: '1–9, Q / E, WASD — ракурсы' }),
         h('span', { class: 'vr-spacer' }),
+        h('button', {
+          class: 'vr-btn',
+          dataset: { search: '1' },
+          title: 'Поискать на YouTube другие видео с этого события',
+          text: '🔍 Найти ракурсы',
+        }),
         h('button', {
           class: 'vr-btn',
           dataset: { sync: '1' },
@@ -446,8 +483,29 @@
         list.append(card);
       });
 
-      s.append(head, list);
+      s.append(head, h('div', { class: 'vr-row' }, this.map.el, list));
+      if (this.searchEl) s.append(this.searchEl);
+      this.map.render();
       this.updateStripStatus();
+    }
+
+    toggleSearch() {
+      if (this.searchEl) {
+        this.searchEl.remove();
+        this.searchEl = null;
+        return;
+      }
+      this.searchEl = searchPanel({
+        videoId: this.active,
+        room: this.room,
+        player: { playerEl: this.playerEl, video: this.video },
+        onDone: (added, roomId, allVerified) => {
+          this.searchEl = null;
+          // New cameras without verified offsets: offer audio sync once the room arrives.
+          if (added && !allVerified) this.syncAfterUpdate = true;
+        },
+      });
+      this.strip.append(this.searchEl);
     }
 
     updateStripStatus() {
@@ -459,6 +517,7 @@
         card.classList.toggle('vr-off', !!off);
         card.title = this.camLabel(cam) + (off ? ` — ${off}` : '');
       }
+      this.map.update();
     }
 
     onStripClick(e) {
@@ -467,6 +526,7 @@
       if (btn.dataset.cam) this.switchTo(btn.dataset.cam);
       else if (btn.dataset.cinema) this.openCinema();
       else if (btn.dataset.sync) this.syncByAudio();
+      else if (btn.dataset.search) this.toggleSearch();
     }
 
     onKey(e) {
@@ -512,7 +572,316 @@
     }
   }
 
+  // ---------- "find other angles" ----------
+
+  let offerSyncForRoom = null; // room created from the finder: offer audio sync once mounted
+  let takeover = false; // the native player is busy with an audio check
+
+  // Audio check: a single excerpt can match by chance (rhythmic music), but two
+  // independent excerpts landing on the same offset almost never do. Measured on
+  // KOD 2016: true angles agree within 0.1 s, other battles never agree.
+  const CHECK_LENGTH = 60; // s per excerpt
+  const CHECK_POINTS = [0.3, 0.55, 0.8]; // where to listen, as a fraction of the duration
+  const CHECK_MAX = 12; // candidates checked per run
+  const AGREE = 0.5; // s: two excerpts "agree" if their offsets are this close
+  const LONE_Z = 8; // a single very distinct peak still earns a "maybe"
+
+  // Borrows the native player for a capture and puts everything back after:
+  // the video, position, play state and the user's YouTube volume.
+  async function withPlayer({ playerEl, video }, run) {
+    const back = { id: nativeVideoId(), t: video.currentTime, paused: video.paused };
+    let volume = null;
+    try {
+      volume = bridge('getVolume');
+    } catch {
+      // keep going; the element's own volume is restored by the capture
+    }
+    const title = h('div');
+    const note = h('div', { class: 'vr-poster-note' });
+    const overlay = h('div', { class: 'vr-stage' }, h('div', { class: 'vr-poster vr-show' }, h('div', { class: 'vr-spinner' }), title, note));
+    const container = playerEl.querySelector('.html5-video-container');
+    if (container) container.after(overlay);
+    else playerEl.append(overlay);
+    const setStatus = (t, n = '') => {
+      title.textContent = t;
+      note.textContent = n;
+    };
+
+    takeover = true;
+    try {
+      return await run(setStatus);
+    } finally {
+      try {
+        if (back.id) bridge('load', { videoId: back.id, start: back.t });
+        const until = performance.now() + 10000;
+        while (performance.now() < until && !(nativeVideoId() === back.id && video.readyState >= 2)) await sleep(100);
+        if (back.paused) video.pause();
+        if (volume) bridge('setVolume', volume);
+      } catch {
+        // best effort
+      }
+      overlay.remove();
+      takeover = false;
+    }
+  }
+
+  // Results list with checkboxes; adds the picked videos to `room` (or creates one).
+  // `player` = { playerEl, video } of the page, used by the audio check.
+  function searchPanel({ videoId, room, player, onDone }) {
+    const picked = new Set();
+    const offsets = new Map(); // videoId → offset found by the audio check
+    const rows = new Map(); // videoId → { cb, badge, cand }
+    const status = h('div', { class: 'vr-hint', text: 'Ищу видео с этого события…' });
+    const list = h('div', { class: 'vr-cands' });
+    const doubtTitle = h('div', { class: 'vr-cands-sep', text: 'Сомнительно: похоже на другой баттл или год' });
+    const doubtList = h('div', { class: 'vr-cands' });
+    const checkBtn = h('button', {
+      class: 'vr-btn',
+      text: '🎧 Проверить звуком',
+      title: 'Сравнить звук кандидатов с этим видео: точно отсеивает чужие события и сразу находит сдвиги',
+      disabled: true,
+    });
+    const addBtn = h('button', { class: 'vr-btn vr-btn-accent', text: 'Добавить выбранные', disabled: true });
+    const closeBtn = h('button', { class: 'vr-btn', title: 'Закрыть', text: '✕' });
+    const panel = h(
+      'div',
+      { class: 'vr-search' },
+      h(
+        'div',
+        { class: 'vr-head' },
+        h('span', { class: 'vr-title', text: '🔍 Другие ракурсы' }),
+        h('span', { class: 'vr-hint', text: 'Отметьте видео с того же события' }),
+        h('span', { class: 'vr-spacer' }),
+        checkBtn,
+        addBtn,
+        closeBtn
+      ),
+      status,
+      list
+    );
+    let info = null;
+    let checking = null;
+
+    const refreshAdd = () => {
+      addBtn.disabled = !picked.size || !!checking;
+      addBtn.textContent = picked.size ? `Добавить выбранные (${picked.size})` : 'Добавить выбранные';
+    };
+    const setPicked = (id, on) => {
+      const row = rows.get(id);
+      if (!row || row.cb.disabled) return;
+      row.cb.checked = on;
+      if (on) picked.add(id);
+      else picked.delete(id);
+      refreshAdd();
+    };
+
+    closeBtn.addEventListener('click', () => {
+      checking?.cancel();
+      panel.remove();
+      onDone(0);
+    });
+
+    (async () => {
+      try {
+        const rooms = await VR.loadRooms();
+        const already = new Set(room ? room.cameras.map((c) => c.videoId) : []);
+        const res = await globalThis.VRAngleSearch.findAngles(videoId, already, (t) => (status.textContent = t));
+        info = res.info;
+        const good = res.candidates.filter((c) => !c.doubtful);
+        const doubt = res.candidates.filter((c) => c.doubtful);
+        status.textContent = res.candidates.length
+          ? `Найдено ${good.length}${doubt.length ? ` + ${doubt.length} сомнительных` : ''} (просмотрено ${res.total}). ` +
+            'Названия бывают обманчивы — «🎧 Проверить звуком» скажет точно.'
+          : 'Похожих видео не нашлось.';
+        for (const c of res.candidates) {
+          const other = VR.findRoomByVideo(rooms, c.videoId);
+          const busy = !!other && (!room || other.id !== room.id);
+          const cb = h('input', { type: 'checkbox', disabled: busy });
+          cb.addEventListener('change', () => setPicked(c.videoId, cb.checked));
+          const badge = h('span', { class: 'vr-badge' });
+          const meta = [c.channel, c.duration ? fmtTime(c.duration) : null, busy ? `уже в комнате «${other.name}»` : null, ...c.why.slice(0, 2)];
+          const row = h(
+            'label',
+            { class: busy ? 'vr-cand vr-cand-busy' : 'vr-cand' },
+            cb,
+            h('img', { src: VR.thumbUrl(c.videoId), alt: '', loading: 'lazy' }),
+            h(
+              'span',
+              { class: 'vr-cand-info' },
+              h('a', { class: 'vr-cand-title', href: `/watch?v=${c.videoId}`, target: '_blank', rel: 'noopener', text: c.title }),
+              h('span', { class: 'vr-hint', text: meta.filter(Boolean).join(' · ') }),
+              badge
+            )
+          );
+          rows.set(c.videoId, { cb, badge, cand: c, busy });
+          (c.doubtful ? doubtList : list).append(row);
+        }
+        if (doubt.length) panel.append(doubtTitle, doubtList);
+        checkBtn.disabled = !res.candidates.length || !player;
+      } catch (err) {
+        status.textContent = `Поиск не удался: ${err.message}`;
+      }
+    })();
+
+    checkBtn.addEventListener('click', async () => {
+      if (checking) return checking.cancel();
+      const AS = globalThis.VRAudioSync;
+      const targets = [...rows.values()].filter((r) => !r.busy).slice(0, CHECK_MAX);
+      const seedCam = room?.cameras.find((c) => c.videoId === videoId);
+      const seedDur = info?.duration || 600;
+      const minutes = Math.max(1, Math.round((seedDur / AS.RATE + targets.length * 2.5 * (CHECK_LENGTH / AS.CHECK_RATE + 2)) / 60));
+      if (
+        !window.confirm(
+          `Videoroom прослушает это видео целиком на ${AS.RATE}× и по 2–3 минутных фрагмента у ${targets.length} кандидатов на ${AS.CHECK_RATE}× (без звука для вас).\n` +
+            `Это займёт до ~${minutes} мин; прослушанное раньше берётся из кэша.\n\nНачать?`
+        )
+      ) {
+        return;
+      }
+
+      checking = new AS.Capture({
+        video: player.video,
+        playerEl: player.playerEl,
+        load: (id, start) => bridge('load', { videoId: id, start }),
+        nativeVideoId,
+      });
+      checkBtn.textContent = '✕ Остановить проверку';
+      refreshAdd();
+      let verified = 0;
+      try {
+        await withPlayer(player, async (setStatus) => {
+          checking.d.onProgress = ({ pos, dur }) =>
+            setStatus('Проверка звуком · исходное видео', `${Math.round((pos / dur) * 100) || 0}%`);
+          setStatus('Проверка звуком · исходное видео');
+          const ref = await checking.envelope(videoId, 'исходное видео');
+          for (const [i, r] of targets.entries()) {
+            const c = r.cand;
+            const step = `кандидат ${i + 1} из ${targets.length}`;
+            setStatus('Проверка звуком', `${step}: ${c.title.slice(0, 60)}`);
+            status.textContent = `Проверяю звук: ${step}…`;
+            r.badge.textContent = '🎧 слушаю…';
+            r.badge.className = 'vr-badge';
+            checking.d.onProgress = null;
+            const dur = c.duration || 600;
+            const len = Math.min(CHECK_LENGTH, Math.max(20, dur / 4));
+            const starts = CHECK_POINTS.map((f) => Math.max(0, Math.min(dur * f, dur - len - 5)));
+            // Listen to up to three parts; stop as soon as two agree on the offset.
+            const matches = [];
+            let agreed = null;
+            for (const start of starts) {
+              const m = AS.matchExcerpt(ref, await checking.excerpt(c.videoId, start, len), start);
+              if (!m) continue;
+              const twin = matches.find((x) => Math.abs(x.offset - m.offset) < AGREE);
+              matches.push(m);
+              if (twin) {
+                agreed = (twin.offset + m.offset) / 2;
+                break;
+              }
+            }
+            const loneZ = Math.max(0, ...matches.map((m) => m.z));
+            if (agreed != null) {
+              const offset = VR.round2((seedCam?.offset || 0) + agreed);
+              offsets.set(c.videoId, offset);
+              r.badge.textContent = `✓ общий звук · сдвиг ${offset >= 0 ? '+' : '−'}${Math.abs(offset).toFixed(1)} с`;
+              r.badge.className = 'vr-badge vr-badge-ok';
+              setPicked(c.videoId, true);
+              verified++;
+            } else if (loneZ >= LONE_Z) {
+              r.badge.textContent = '? звук похож, но не уверенно';
+              r.badge.className = 'vr-badge vr-badge-maybe';
+            } else {
+              r.badge.textContent = '✗ другой звук';
+              r.badge.className = 'vr-badge vr-badge-no';
+              setPicked(c.videoId, false);
+            }
+          }
+        });
+        status.textContent = `Проверка закончена: ${verified} из ${targets.length} с общим звуком — они отмечены.`;
+      } catch (err) {
+        status.textContent = err.message === 'cancelled' ? 'Проверка остановлена.' : `Проверка не удалась: ${err.message}`;
+      } finally {
+        checking = null;
+        checkBtn.textContent = '🎧 Проверить звуком';
+        refreshAdd();
+      }
+    });
+
+    addBtn.addEventListener('click', async () => {
+      addBtn.disabled = true;
+      const target = room
+        ? JSON.parse(JSON.stringify(room))
+        : { id: VR.newRoomId(), name: eventName(info, videoId), audioMode: 'main', cameras: [{ videoId, label: '', offset: 0 }] };
+      for (const id of picked) {
+        if (!target.cameras.some((c) => c.videoId === id)) target.cameras.push({ videoId: id, label: '', offset: offsets.get(id) ?? 0 });
+      }
+      const saved = await VR.saveRoom(VR.normalizeRoom(target));
+      const allVerified = [...picked].every((id) => offsets.has(id));
+      panel.remove();
+      onDone(picked.size, saved.id, allVerified);
+    });
+
+    return panel;
+  }
+
+  function eventName(info, videoId) {
+    if (!info) return `Событие ${videoId}`;
+    return globalThis.VRAngleSearch.buildQueries(info)[0].slice(0, 100) || info.title;
+  }
+
+  // Compact bar under videos that aren't in any room yet.
+  class FinderBar {
+    constructor(videoId, { player, video, below }) {
+      this.videoId = videoId;
+      const find = h('button', { class: 'vr-btn vr-btn-accent', text: '🔍 Найти ракурсы' });
+      const hide = h('button', { class: 'vr-btn', title: 'Скрыть (отключается в настройках расширения)', text: '✕' });
+      this.el = h(
+        'div',
+        { class: 'vr-strip vr-finder' },
+        h(
+          'div',
+          { class: 'vr-head' },
+          h('span', { class: 'vr-title', text: '🎥 Videoroom' }),
+          h('span', { class: 'vr-hint', text: 'Есть другие ракурсы этого события? Соберите их в комнату.' }),
+          h('span', { class: 'vr-spacer' }),
+          find,
+          hide
+        )
+      );
+      find.addEventListener('click', () => {
+        if (this.panel) return;
+        this.panel = searchPanel({
+          videoId,
+          room: null,
+          player: { playerEl: player, video },
+          onDone: (added, roomId, allVerified) => {
+            this.panel = null;
+            if (added && !allVerified) offerSyncForRoom = roomId; // the session appears via storage change
+          },
+        });
+        this.el.append(this.panel);
+      });
+      hide.addEventListener('click', () => this.destroy());
+      below.prepend(this.el);
+    }
+
+    destroy() {
+      this.el.remove();
+    }
+  }
+
   // ---------- lifecycle ----------
+
+  let finder = null;
+
+  // Shared rooms published to the registry (fetched by the background worker).
+  async function sharedRoomFor(videoId) {
+    try {
+      const res = await chrome.runtime.sendMessage({ type: 'sharedRoom', videoId });
+      return res?.room ? VR.normalizeRoom(res.room) : null;
+    } catch {
+      return null;
+    }
+  }
 
   async function refresh() {
     const seq = ++refreshSeq;
@@ -533,20 +902,40 @@
       session.setRoom(room);
       return;
     }
+
+    let shared = false;
+    if (vid && !room) {
+      room = await sharedRoomFor(vid);
+      shared = !!room;
+      if (seq !== refreshSeq) return;
+      if (session && room && session.pageVideoId === vid && session.room.id === room.id) return;
+    }
+
     session?.destroy();
     session = null;
-    if (!room) return;
+    finder?.destroy();
+    finder = null;
+    if (!vid) return;
 
     const els = await waitForElements(seq);
     if (!els || seq !== refreshSeq) return;
-    session = new RoomSession(room, vid, els);
+    if (room) {
+      session = new RoomSession(room, vid, els, { shared });
+      if (offerSyncForRoom === room.id) {
+        offerSyncForRoom = null;
+        session.syncAfterUpdate = true;
+        session.maybeOfferSync();
+      }
+    } else if ((await VR.loadSettings()).showFinder !== false && seq === refreshSeq) {
+      finder = new FinderBar(vid, els);
+    }
   }
 
   // Capture phase on window so we run before YouTube's own hotkeys.
   window.addEventListener('keydown', (e) => session?.onKey(e), true);
   document.addEventListener('yt-navigate-finish', refresh);
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.rooms) refresh();
+    if (area === 'local' && (changes.rooms || changes.settings)) refresh();
   });
   refresh();
 })();

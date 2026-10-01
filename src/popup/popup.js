@@ -71,8 +71,8 @@
       });
       const exp = h('button', { text: 'Экспорт', title: 'Скопировать JSON комнаты' });
       exp.addEventListener('click', async () => {
-        const { name, audioMode, cameras } = room;
-        await navigator.clipboard.writeText(JSON.stringify({ name, audioMode, cameras }, null, 2));
+        const { name, audioMode, cameras, stage } = room;
+        await navigator.clipboard.writeText(JSON.stringify({ name, audioMode, cameras, stage }, null, 2));
         exp.textContent = 'Скопировано';
         setTimeout(() => (exp.textContent = 'Экспорт'), 1500);
       });
@@ -84,6 +84,7 @@
             h('div', { class: 'muted small', text: camCountLabel(room.cameras.length) })),
           h('div', { class: 'btns' },
             h('button', { text: '🎬', title: 'Открыть в кинозале', onclick: () => openCinema(room) }),
+            h('button', { text: '🌐', title: 'Поделиться: опубликовать комнату для всех пользователей Videoroom', onclick: () => shareRoom(room) }),
             h('button', { text: 'Изменить', onclick: () => openEditor(room.id) }),
             exp,
             del))
@@ -98,11 +99,29 @@
     window.close();
   }
 
+  // Publishing goes through a GitHub issue: the registry's Action validates
+  // the JSON and adds the room (see registry/ in the extension's sources).
+  async function shareRoom(room) {
+    if (room.cameras.length < 2) return alert('В общей комнате должно быть хотя бы два ракурса.');
+    const { id, name, audioMode, cameras, stage } = room;
+    const json = JSON.stringify({ id, name, audioMode, cameras, stage }, null, 2);
+    const body =
+      'Комната Videoroom для общего доступа. Нажмите **Submit new issue**: бот проверит её и ответит здесь.\n\n' +
+      '```json\n' + json + '\n```\n';
+    const url =
+      'https://github.com/Beetlejuice8921/videoroom-rooms/issues/new?' +
+      new URLSearchParams({ title: `Room: ${name}`, body }).toString();
+    await chrome.tabs.create({ url });
+    window.close();
+  }
+
   // ---------- settings ----------
 
   async function openSettings() {
     const settings = await VR.loadSettings();
     $('#cinema-url').value = settings.cinemaUrl || '';
+    $('#show-finder').checked = settings.showFinder !== false;
+    $('#use-shared').checked = settings.useShared !== false;
     $('#settings-error').hidden = true;
     show('settings-view');
   }
@@ -118,6 +137,8 @@
     const settings = await VR.loadSettings();
     if (raw) settings.cinemaUrl = raw;
     else delete settings.cinemaUrl;
+    settings.showFinder = $('#show-finder').checked;
+    settings.useShared = $('#use-shared').checked;
     await VR.saveSettings(settings);
     show('list-view');
   }

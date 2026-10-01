@@ -185,6 +185,17 @@ textarea {
   font-size: 12px;
 }
 
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.check input {
+  width: auto;
+}
+
 .field {
   display: block;
   margin-bottom: 8px;

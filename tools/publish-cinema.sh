@@ -12,7 +12,7 @@ trap 'rm -rf "$BUILD"' EXIT
 
 mkdir -p "$BUILD/room" "$BUILD/shared"
 cp "$ROOT"/src/room/room.{html,css,js} "$BUILD/room/"
-cp "$ROOT"/src/shared/{rooms.js,embed-player.js} "$BUILD/shared/"
+cp "$ROOT"/src/shared/*.{js,css} "$BUILD/shared/"
 # Pages caches assets for 10 min; version the references so updates apply at once.
 VER="$(date +%s)"
 sed -i -E "s#(src|href)=\"([^\"]+\.(js|css))\"#\1=\"\2?v=$VER\"#g" "$BUILD/room/room.html"

@@ -539,83 +539,34 @@
 
   // ---------- venue map ----------
 
-  const pins = new Map();
-  let mapEditing = false;
+  let map = null;
 
   function renderMap() {
-    const map = $('#map');
-    for (const pin of pins.values()) pin.remove();
-    pins.clear();
-    room.cameras.forEach((c, i) => {
-      const pin = h('button', { class: c.pos ? 'pin' : 'pin auto', type: 'button', dataset: { cam: c.videoId }, title: camLabel(c), text: String(i + 1) });
-      placePin(pin, VR.camPos(room, c.videoId));
-      pins.set(c.videoId, pin);
-      map.append(pin);
-    });
-    updateMap();
-  }
-
-  function placePin(pin, pos) {
-    pin.style.left = `${pos.x * 100}%`;
-    pin.style.top = `${pos.y * 100}%`;
+    map.render();
   }
 
   function updateMap() {
-    const t = now();
-    for (const [id, pin] of pins) {
-      const c = cam(id);
-      pin.classList.toggle('active', id === active);
-      pin.classList.toggle('blocked', blocked.has(id));
-      pin.classList.toggle('off', !!c && inRange(c, t) === false);
-    }
+    map?.update();
   }
 
   function bindMap() {
-    const map = $('#map');
-    let drag = null;
-
-    $('#map-edit').addEventListener('click', () => {
-      mapEditing = !mapEditing;
-      map.classList.toggle('editing', mapEditing);
-      toast(mapEditing ? 'Перетащите камеры туда, где они стояли. ✎ — готово' : 'Расстановка сохранена');
-    });
-
-    map.addEventListener('pointerdown', (e) => {
-      const pin = e.target.closest('.pin');
-      if (!pin || !mapEditing) return;
-      drag = { pin, id: pin.dataset.cam, moved: false };
-      pin.setPointerCapture(e.pointerId);
-      pin.classList.add('dragging');
-    });
-    map.addEventListener('pointermove', (e) => {
-      if (!drag) return;
-      const r = map.getBoundingClientRect();
-      drag.pos = {
-        x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
-        y: Math.min(1, Math.max(0.2, (e.clientY - r.top) / r.height)), // below the stage bar
-      };
-      drag.moved = true;
-      placePin(drag.pin, drag.pos);
-    });
-    const endDrag = () => {
-      if (!drag) return;
-      drag.pin.classList.remove('dragging');
-      if (drag.moved) {
-        const c = cam(drag.id);
-        c.pos = { x: VR.round2(drag.pos.x), y: VR.round2(drag.pos.y) };
-        drag.pin.classList.remove('auto');
+    map = new VRVenueMap({
+      getRoom: () => room,
+      getActive: () => active,
+      isUnavailable: (id) => blocked.has(id) || inRange(cam(id)) === false,
+      label: camLabel,
+      onSelect: switchTo,
+      onMove: (id, pos) => {
+        cam(id).pos = pos;
         scheduleSave();
-      }
-      drag.wasDrag = drag.moved;
-      setTimeout(() => (drag = null));
-    };
-    map.addEventListener('pointerup', endDrag);
-    map.addEventListener('pointercancel', endDrag);
-    map.addEventListener('click', (e) => {
-      const pin = e.target.closest('.pin');
-      if (!pin || (drag && drag.wasDrag)) return;
-      switchTo(pin.dataset.cam);
+      },
+      onStageMove: (pos) => {
+        room.stage = pos;
+        scheduleSave();
+      },
+      onEditToggle: (on) => toast(on ? 'Перетащите камеры и сцену туда, где они были. ✎ — готово' : 'Расстановка сохранена'),
     });
+    $('#bottom').prepend(map.el);
   }
 
   function moveDir(dir) {
