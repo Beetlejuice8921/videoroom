@@ -65,26 +65,37 @@
     return Math.max(ca / A.size, cb / B.size, (ca / Math.min(A.size, B.size)) * 0.85);
   }
 
-  // "Criminalz (FRANCE) vs CHINA" → "china|france". Order-insensitive.
+  // "Criminalz (FRANCE) vs CHINA" → sides {criminalz, france} and {china}.
+  // Each side keeps up to three telling words (no "b-boy", "team", years…);
+  // two pairs are the same battle if both sides share a word, in either order.
   const VS = new Set(['vs', 'v', 'versus', 'против']);
-  const JOIN = new Set(['south', 'north', 'new', 'united', 'hong', 'saudi', 'czech', 'costa', 'puerto', 'южная', 'северная']);
-  const SKIP = new Set(['the', 'team', 'crew', 'and']);
+  const SIDE_SKIP = new Set(
+    'b boy bboy bgirl girl mc dj team crew the and of final finals semi semifinal quarter battle round top live'.split(' ')
+  );
   function vsPair(text) {
-    const w = words(String(text || '').replace(/[()[\]【】]/g, ' '));
-    for (let i = 1; i + 1 < w.length; i++) {
-      if (!VS.has(w[i])) continue;
-      let b = i - 1;
-      while (b > 0 && SKIP.has(w[b])) b--;
-      let a = i + 1;
-      while (a + 1 < w.length && SKIP.has(w[a])) a++;
-      const left = w[b];
-      const right = JOIN.has(w[a]) && w[a + 1] ? w[a] + ' ' + w[a + 1] : w[a];
-      // "south korea vs X": the left side may be two words too.
-      const left2 = b > 0 && JOIN.has(w[b - 1]) ? w[b - 1] + ' ' + left : left;
-      if (/^\d+$/.test(left) && /^\d+$/.test(right)) continue; // scores like 2 v 1
-      return [left2, right].sort().join('|');
+    const segments = String(text || '')
+      // (Round brackets usually wrap the sides, "(FRANCE) vs (CHINA)"; square
+      // ones hold notes like "[4K]" or "[stance angle]" and end a segment.)
+      .replace(/[(){}]/g, ' ')
+      .split(/\s[-–—]\s|[|/\\:•[\]【】]+/);
+    for (const seg of segments) {
+      const w = words(seg);
+      const i = w.findIndex((x) => VS.has(x));
+      if (i <= 0 || i >= w.length - 1) continue;
+      const side = (list) => list.filter((x) => !SIDE_SKIP.has(x) && !STOP.has(x) && !/^(19|20)\d\d$/.test(x)).slice(0, 3);
+      const left = side(w.slice(0, i).reverse());
+      const right = side(w.slice(i + 1));
+      if (!left.length || !right.length) continue;
+      if ([...left, ...right].every((x) => /^d+$/.test(x))) continue; // a score like "2 v 1"
+      const key = [[...left].sort().join(' '), [...right].sort().join(' ')].sort().join('|');
+      return { left: new Set(left), right: new Set(right), key };
     }
     return null;
+  }
+
+  function samePair(p, q) {
+    const meet = (a, b) => [...a].some((x) => b.has(x));
+    return (meet(p.left, q.left) && meet(p.right, q.right)) || (meet(p.left, q.right) && meet(p.right, q.left));
   }
 
   const STAGES = [
@@ -298,7 +309,7 @@
 
     // Contradictions in pair / stage / discipline almost always mean another battle.
     if (seedEv.pair && ev.pair) {
-      if (seedEv.pair === ev.pair) (s += 0.2), why.push('те же соперники');
+      if (samePair(seedEv.pair, ev.pair)) (s += 0.2), why.push('те же соперники');
       else (s -= 0.8), why.push('другие соперники');
     }
     if (seedEv.stage && ev.stage) {
@@ -347,7 +358,10 @@
       return !second || first[1] >= second[1] * 1.2 ? first[0] : null;
     };
     const out = { ...seedEv };
-    if (!out.pair) out.pair = pick((e) => [e.pair]);
+    if (!out.pair) {
+      const key = pick((e) => [e.pair?.key]);
+      out.pair = key ? sure.map(eventOf).find((e) => e.pair?.key === key).pair : null;
+    }
     if (!out.stage) out.stage = pick((e) => [e.stage]);
     if (!out.disciplines.size) {
       const d = pick((e) => [...e.disciplines]);
@@ -412,6 +426,7 @@
     tokens,
     titleSimilarity,
     vsPair,
+    samePair,
     stage,
     disciplines,
     parseAgo,

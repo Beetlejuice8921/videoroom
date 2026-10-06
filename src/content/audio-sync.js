@@ -219,6 +219,38 @@
     return { offset: r.lag - start, ratio: r.ratio, z: r.z };
   }
 
+  // Chunk matching, used by the candidate check. A part of a recording is cut
+  // into 30 s chunks every 10 s; each chunk is matched against the reference.
+  // Chunks of a real angle land on one offset; chunks of another event scatter.
+  // Measured on concert fancams and battles: the same event usually gives
+  // groups of 6–10 agreeing chunks, other events 3–4 at most (the same song
+  // played on another night), so the check needs 5 for "same audio".
+  const CHUNK = 30;
+  const CHUNK_STEP = 10;
+  const CHUNK_TOL = 0.3;
+
+  // `env` is a captured part of the candidate that starts at `start` s.
+  function chunkHits(refFeat, env, start) {
+    const f = features(env);
+    const n = Math.round(CHUNK / DT);
+    const hits = [];
+    for (let k0 = 0; k0 + n <= f.length; k0 += Math.round(CHUNK_STEP / DT)) {
+      const r = correlate(refFeat, f.slice(k0, k0 + n), CHUNK * 0.9);
+      if (r) hits.push({ offset: r.lag - (start + k0 * DT), z: r.z });
+    }
+    return hits;
+  }
+
+  // Largest group of hits agreeing on the offset: { size, offset }.
+  function clusterHits(hits) {
+    let best = { size: 0, offset: null };
+    for (const h of hits) {
+      const group = hits.filter((x) => Math.abs(x.offset - h.offset) <= CHUNK_TOL);
+      if (group.length > best.size) best = { size: group.length, offset: group.reduce((s, x) => s + x.offset, 0) / group.length };
+    }
+    return best;
+  }
+
   // ---------- envelope cache ----------
 
   function encodeEnv(env) {
@@ -308,8 +340,13 @@
       await g.ctx.resume();
       const adShowing = () => playerEl.classList.contains('ad-showing');
 
-      this.d.load(videoId, from);
-      const deadline = Date.now() + 60000;
+      // Reloading the video that is already open can leave it paused for good.
+      if (this.d.nativeVideoId() === videoId) {
+        if (Math.abs(v.currentTime - from) > 1) v.currentTime = from;
+      } else {
+        this.d.load(videoId, from);
+      }
+      const deadline = Date.now() + 90000; // pre-roll ads can be long
       while (!(this.d.nativeVideoId() === videoId && !adShowing() && v.readyState >= 2)) {
         if (this.cancelled) throw new Error('cancelled');
         if (Date.now() > deadline) throw new Error(`видео ${videoId} не загрузилось`);
@@ -372,5 +409,5 @@
     }
   }
 
-  globalThis.VRAudioSync = { Capture, solveOffsets, matchExcerpt, correlate, features, toGrid, encodeEnv, decodeEnv, DT, RATE, CHECK_RATE };
+  globalThis.VRAudioSync = { Capture, solveOffsets, matchExcerpt, chunkHits, clusterHits, correlate, features, toGrid, encodeEnv, decodeEnv, DT, RATE, CHECK_RATE };
 })();

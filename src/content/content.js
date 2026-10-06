@@ -577,14 +577,18 @@
   let offerSyncForRoom = null; // room created from the finder: offer audio sync once mounted
   let takeover = false; // the native player is busy with an audio check
 
-  // Audio check: a single excerpt can match by chance (rhythmic music), but two
-  // independent excerpts landing on the same offset almost never do. Measured on
-  // KOD 2016: true angles agree within 0.1 s, other battles never agree.
-  const CHECK_LENGTH = 60; // s per excerpt
-  const CHECK_POINTS = [0.3, 0.55, 0.8]; // where to listen, as a fraction of the duration
+  // Audio check: candidates are cut into 30 s chunks matched against the seed
+  // (see chunkHits in audio-sync.js); a group of chunks agreeing on one offset
+  // confirms the angle. Tuned with tools/tune-check.js on concert fancams
+  // (NewJeans, Coldplay) and KOD battles.
+  const CHECK_FULL_MAX = 20 * 60; // s: shorter candidates are listened to in full
+  const CHECK_LENGTH = 60; // s per excerpt of longer candidates
+  const CHECK_POINTS = [0.3, 0.55, 0.8]; // where to listen in long candidates
   const CHECK_MAX = 12; // candidates checked per run
-  const AGREE = 0.5; // s: two excerpts "agree" if their offsets are this close
-  const LONE_Z = 8; // a single very distinct peak still earns a "maybe"
+  // Other events reached 3 agreeing chunks offline and 4 once live (the same
+  // song on another night); real angles usually reach 6–10.
+  const GROUP_OK = 5; // agreeing chunks for "same audio"
+  const GROUP_MAYBE = 3;
 
   // Borrows the native player for a capture and puts everything back after:
   // the video, position, play state and the user's YouTube volume.
@@ -691,7 +695,7 @@
         const doubt = res.candidates.filter((c) => c.doubtful);
         status.textContent = res.candidates.length
           ? `Найдено ${good.length}${doubt.length ? ` + ${doubt.length} сомнительных` : ''} (просмотрено ${res.total}). ` +
-            'Названия бывают обманчивы — «🎧 Проверить звуком» скажет точно.'
+            'Названия бывают обманчивы — «🎧 Проверить звуком» поможет отсеять чужие видео.'
           : 'Похожих видео не нашлось.';
         for (const c of res.candidates) {
           const other = VR.findRoomByVideo(rooms, c.videoId);
@@ -729,10 +733,12 @@
       const targets = [...rows.values()].filter((r) => !r.busy).slice(0, CHECK_MAX);
       const seedCam = room?.cameras.find((c) => c.videoId === videoId);
       const seedDur = info?.duration || 600;
-      const minutes = Math.max(1, Math.round((seedDur / AS.RATE + targets.length * 2.5 * (CHECK_LENGTH / AS.CHECK_RATE + 2)) / 60));
+      const listen = (r) => (r.cand.duration && r.cand.duration <= CHECK_FULL_MAX ? r.cand.duration : CHECK_LENGTH * CHECK_POINTS.length);
+      const seconds = seedDur / AS.RATE + targets.reduce((s, r) => s + listen(r) / AS.CHECK_RATE + 2, 0);
+      const minutes = Math.max(1, Math.round(seconds / 60));
       if (
         !window.confirm(
-          `Videoroom прослушает это видео целиком на ${AS.RATE}× и по 2–3 минутных фрагмента у ${targets.length} кандидатов на ${AS.CHECK_RATE}× (без звука для вас).\n` +
+          `Videoroom прослушает это видео на ${AS.RATE}× и ${targets.length} кандидатов на ${AS.CHECK_RATE}× (без звука для вас).\n` +
             `Это займёт до ~${minutes} мин; прослушанное раньше берётся из кэша.\n\nНачать?`
         )
       ) {
@@ -753,7 +759,7 @@
           checking.d.onProgress = ({ pos, dur }) =>
             setStatus('Проверка звуком · исходное видео', `${Math.round((pos / dur) * 100) || 0}%`);
           setStatus('Проверка звуком · исходное видео');
-          const ref = await checking.envelope(videoId, 'исходное видео');
+          const refFeat = AS.features(await checking.envelope(videoId, 'исходное видео'));
           for (const [i, r] of targets.entries()) {
             const c = r.cand;
             const step = `кандидат ${i + 1} из ${targets.length}`;
@@ -763,34 +769,39 @@
             r.badge.className = 'vr-badge';
             checking.d.onProgress = null;
             const dur = c.duration || 600;
-            const len = Math.min(CHECK_LENGTH, Math.max(20, dur / 4));
-            const starts = CHECK_POINTS.map((f) => Math.max(0, Math.min(dur * f, dur - len - 5)));
-            // Listen to up to three parts; stop as soon as two agree on the offset.
-            const matches = [];
-            let agreed = null;
-            for (const start of starts) {
-              const m = AS.matchExcerpt(ref, await checking.excerpt(c.videoId, start, len), start);
-              if (!m) continue;
-              const twin = matches.find((x) => Math.abs(x.offset - m.offset) < AGREE);
-              matches.push(m);
-              if (twin) {
-                agreed = (twin.offset + m.offset) / 2;
-                break;
+            // Short videos in full; long ones in three excerpts. Stop once the group is big enough.
+            const parts =
+              dur <= CHECK_FULL_MAX
+                ? [[0, Math.max(10, dur - 4)]]
+                : CHECK_POINTS.map((f) => [Math.max(0, Math.min(dur * f, dur - CHECK_LENGTH - 5)), CHECK_LENGTH]);
+            const hits = [];
+            let group = { size: 0, offset: null };
+            try {
+              for (const [start, len] of parts) {
+                hits.push(...AS.chunkHits(refFeat, await checking.excerpt(c.videoId, start, len), start));
+                group = AS.clusterHits(hits);
+                if (group.size >= GROUP_OK) break;
               }
+            } catch (err) {
+              if (err.message === 'cancelled') throw err;
+              // One video that won't load (long ads, removed, region) must not stop the rest.
+              r.badge.textContent = `⚠ не удалось проверить: ${err.message}`;
+              r.badge.className = 'vr-badge vr-badge-maybe';
+              continue;
             }
-            const loneZ = Math.max(0, ...matches.map((m) => m.z));
-            if (agreed != null) {
-              const offset = VR.round2((seedCam?.offset || 0) + agreed);
+            if (group.size >= GROUP_OK) {
+              const offset = VR.round2((seedCam?.offset || 0) + group.offset);
               offsets.set(c.videoId, offset);
               r.badge.textContent = `✓ общий звук · сдвиг ${offset >= 0 ? '+' : '−'}${Math.abs(offset).toFixed(1)} с`;
               r.badge.className = 'vr-badge vr-badge-ok';
               setPicked(c.videoId, true);
               verified++;
-            } else if (loneZ >= LONE_Z) {
-              r.badge.textContent = '? звук похож, но не уверенно';
+            } else if (group.size >= GROUP_MAYBE) {
+              r.badge.textContent = '? звук похож, но не уверенно (возможно, та же песня в другой день)';
               r.badge.className = 'vr-badge vr-badge-maybe';
             } else {
-              r.badge.textContent = '✗ другой звук';
+              // Not proof of another event: the overlap may be too short or too noisy.
+              r.badge.textContent = '✗ общий звук не найден';
               r.badge.className = 'vr-badge vr-badge-no';
               setPicked(c.videoId, false);
             }

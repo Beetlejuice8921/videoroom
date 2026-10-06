@@ -138,6 +138,25 @@
 
 /* ---------- finder bar & search results ---------- */
 
+/* Keep the buttons on one line: the title and hints shrink first. */
+.vr-strip > .vr-head,
+.vr-search > .vr-head {
+  flex-wrap: nowrap;
+}
+
+.vr-head > .vr-title,
+.vr-head > .vr-hint {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.vr-head > .vr-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .vr-finder .vr-head {
   margin-bottom: 0;
 }
